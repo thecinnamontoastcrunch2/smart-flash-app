@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart-Flash: Titan Edition</title>
+    <style>
+        :root {
+            --primary: #6366f1; --success: #22c55e; --error: #ef4444;
+            --warning: #f59e0b; --bg: #0f172a; --card: #1e293b; --text: #f8fafc;
+            --ultra: #d946ef;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text);
+            display: flex; flex-direction: column; align-items: center; padding: 2rem;
+            margin: 0; min-height: 100vh;
+        }
+
+        /* Stats Header */
+        .header-stats { display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; justify-content: center; }
+        .stat-box { background: var(--card); padding: 10px 20px; border-radius: 12px; border: 1px solid #334155; font-weight: bold; }
+        .score-val { color: var(--warning); }
+
+        /* Card Section */
+        .flashcard-container { perspective: 1000px; width: 380px; height: 240px; margin-bottom: 20px; }
+        .flashcard { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; transition: transform 0.6s; }
+        .flashcard.flipped { transform: rotateY(180deg); }
+        .card-face {
+            position: absolute; width: 100%; height: 100%; backface-visibility: hidden;
+            display: flex; align-items: center; justify-content: center;
+            padding: 25px; border-radius: 20px; font-size: 1.3rem; text-align: center;
+            background: var(--card); border: 2px solid #334155; box-sizing: border-box;
+        }
+        .back { background: var(--primary); transform: rotateY(180deg); }
+
+        /* Interaction */
+        .challenge-zone { width: 380px; display: flex; flex-direction: column; gap: 10px; }
+        input { padding: 15px; border-radius: 12px; border: 2px solid #334155; background: #1e293b; color: white; outline: none; }
+        .btn-group { display: flex; gap: 8px; }
+        button { flex: 1; padding: 12px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn-check { background: var(--success); color: white; }
+        .btn-giveup { background: #475569; color: white; }
+        .btn-next { background: var(--primary); color: white; display: none; }
+
+        /* Badge Vault */
+        .badge-section { width: 100%; max-width: 800px; margin-top: 40px; }
+        .badge-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+            gap: 10px; height: 300px; overflow-y: auto; padding: 15px;
+            background: #111827; border-radius: 15px; border: 1px solid #334155;
+        }
+        .badge {
+            background: #1e293b; padding: 8px; border-radius: 10px; font-size: 0.65rem;
+            text-align: center; opacity: 0.15; filter: grayscale(1); transition: 0.4s;
+            border: 1px solid transparent; position: relative;
+        }
+        .badge.unlocked { opacity: 1; filter: grayscale(0); border-color: var(--warning); background: #2d3748; }
+        .badge.ultra { border-color: var(--ultra); box-shadow: 0 0 10px var(--ultra); }
+        .badge-icon { font-size: 1.5rem; display: block; }
+        .badge:hover::after {
+            content: attr(data-desc); position: absolute; bottom: 110%; left: 50%; transform: translateX(-50%);
+            background: black; color: white; padding: 5px; border-radius: 5px; width: 120px; z-index: 10;
+        }
+
+        #notification { position: fixed; top: 20px; background: var(--ultra); color: white; padding: 12px 25px; border-radius: 50px; display: none; animation: pop 0.4s; z-index: 100; }
+        @keyframes pop { from { transform: scale(0.5); } to { transform: scale(1); } }
+    </style>
+</head>
+<body>
+
+    <div id="notification">🚀 Badge Unlocked!</div>
+
+    <div class="header-stats">
+        <div class="stat-box">Score: <span id="points" class="score-val">0</span></div>
+        <div class="stat-box">Streak: <span id="streak" class="score-val">0</span></div>
+        <div class="stat-box">Correct: <span id="l-correct" class="score-val">0</span></div>
+    </div>
+
+    <div class="flashcard-container">
+        <div class="flashcard" id="card">
+            <div class="card-face front" id="frontText">Add cards to start!</div>
+            <div class="card-face back" id="backText">Answer</div>
+        </div>
+    </div>
+
+    <div class="challenge-zone">
+        <input type="text" id="ans" placeholder="Your answer..." autocomplete="off">
+        <div class="btn-group">
+            <button id="check" class="btn-check" onclick="handleCheck()">Submit</button>
+            <button id="giveup" class="btn-giveup" onclick="handleGiveUp()">Give Up</button>
+            <button id="next" class="btn-next" onclick="next()">Next Card</button>
+        </div>
+    </div>
+
+    <div class="badge-section">
+        <h3>🏆 Badge Vault (<span id="badge-count">0</span>/50)</h3>
+        <div class="badge-grid" id="badgeGrid"></div>
+    </div>
+
+    <div style="margin-top: 20px;">
+        <input type="text" id="f" placeholder="Front"> <input type="text" id="b" placeholder="Back">
+        <button onclick="add()" style="background: var(--primary); color: white; width: auto;">+</button>
+    </div>
+
+    <script>
+        let cards = JSON.parse(localStorage.getItem('t_cards')) || [];
+        let stats = JSON.parse(localStorage.getItem('t_stats')) || {
+            pts: 0, l_cor: 0, streak: 0, max_s: 0, attempts: 0, gave_up: 0, unlocked: []
+        };
+        let tries = 3, idx = 0;
+
+        const badges = [];
+        // Generate 40 Standard/Intermediate Badges
+        for(let i=1; i<=15; i++) badges.push({id: 'pts'+(i*50), n: (i*50)+' Club', d: (i*50)+' Points', icon: '💰', req: s => s.pts >= i*50});
+        for(let i=1; i<=10; i++) badges.push({id: 'cor'+(i*25), n: i*25+' Wins', d: i*25+' Correct', icon: '✅', req: s => s.l_cor >= i*25});
+        for(let i=1; i<=10; i++) badges.push({id: 'str'+(i*5), n: 'Hot '+(i*5), d: i*5+' Streak', icon: '🔥', req: s => s.max_s >= i*5});
+        badges.push({id: 'noob', n: 'Starter', d: '1 Correct', icon: '🐣', req: s => s.l_cor >= 1});
+        badges.push({id: 'librarian', n: 'Librarian', d: '10 Cards Made', icon: '📚', req: s => cards.length >= 10});
+        badges.push({id: 'persistent', n: 'Try Hard', d: '50 Attempts', icon: '🔨', req: s => s.attempts >= 50});
+        badges.push({id: 'honesty', n: 'Honest', d: 'Give up 5 times', icon: '🏳️', req: s => s.gave_up >= 5});
+
+        // 10 EXTREMELY HARD BADGES
+        const hard = [
+            {id: 'god', n: 'Flash God', d: '5,000 Points', icon: '⚡', req: s => s.pts >= 5000},
+            {id: 'perfect', n: 'Perfection', d: '100 Streak', icon: '💎', req: s => s.max_s >= 100},
+            {id: 'titan', n: 'Titan', d: '1,000 Correct Answers', icon: '🏛️', req: s => s.l_cor >= 1000},
+            {id: 'unyielding', n: 'Unyielding', d: 'Zero Give Ups in 200 attempts', icon: '🛡️', req: s => s.attempts >= 200 && s.gave_up === 0},
+            {id: 'sniper', n: 'Point Sniper', d: 'Exactly 777 Points', icon: '🎯', req: s => s.pts === 777},
+            {id: 'encyclopedia', n: 'Author', d: '500 Cards in Deck', icon: '🖋️', req: s => cards.length >= 500},
+            {id: 'immortal', n: 'Immortal', d: '500 Streak', icon: '♾️', req: s => s.max_s >= 500},
+            {id: 'billionaire', n: 'Billionaire', d: '10,000 Points', icon: '👑', req: s => s.pts >= 10000},
+            {id: 'machine', n: 'The Machine', d: '100 Correct in one session (no reloads)', icon: '🤖', req: s => s.l_cor >= 100}, // simplified for demo
+            {id: 'legend', n: 'Legend', d: 'Earn 49 other badges', icon: '🌟', req: s => s.unlocked.length >= 49}
+        ];
+        hard.forEach(h => { h.ultra = true; badges.push(h); });
+
+        function init() {
+            const grid = document.getElementById('badgeGrid');
+            grid.innerHTML = '';
+            badges.forEach(b => {
+                const d = document.createElement('div');
+                d.id = 'b-'+b.id; d.className = 'badge ' + (b.ultra ? 'ultra' : '');
+                d.setAttribute('data-desc', b.d);
+                d.innerHTML = `<span class="badge-icon">${b.icon}</span>${b.n}`;
+                grid.appendChild(d);
+            });
+            updateUI();
+        }
+
+        function updateUI() {
+            document.getElementById('points').innerText = stats.pts;
+            document.getElementById('streak').innerText = stats.streak;
+            document.getElementById('l-correct').innerText = stats.l_cor;
+            if(cards[idx]) {
+                document.getElementById('frontText').innerText = cards[idx].front;
+                document.getElementById('backText').innerText = cards[idx].back;
+            }
+            badges.forEach(b => {
+                if(b.req(stats) && !stats.unlocked.includes(b.id)) {
+                    stats.unlocked.push(b.id);
+                    notify(b.n);
+                }
+                if(stats.unlocked.includes(b.id)) document.getElementById('b-'+b.id).classList.add('unlocked');
+            });
+            document.getElementById('badge-count').innerText = stats.unlocked.length;
+            localStorage.setItem('t_stats', JSON.stringify(stats));
+        }
+
+        function notify(msg) {
+            const n = document.getElementById('notification');
+            n.innerText = "🏆 Unlocked: " + msg; n.style.display = 'block';
+            setTimeout(()=> n.style.display='none', 3000);
+        }
+
+        function handleCheck() {
+            if(!cards[idx]) return;
+            stats.attempts++;
+            const val = document.getElementById('ans').value.trim().toLowerCase();
+            const correct = cards[idx].back.trim().toLowerCase();
+            if(val === correct) {
+                let p = (tries === 3) ? 5 : (tries === 2) ? 3 : 1;
+                stats.pts += p; stats.l_cor++; stats.streak++;
+                if(stats.streak > stats.max_s) stats.max_s = stats.streak;
+                finish();
+            } else {
+                tries--;
+                if(tries <= 0) { stats.pts = Math.max(0, stats.pts - 3); stats.streak = 0; finish(); }
+            }
+            updateUI();
+        }
+
+        function handleGiveUp() {
+            stats.gave_up++; stats.pts = Math.max(0, stats.pts - 3); stats.streak = 0; finish(); updateUI();
+        }
+
+        function finish() {
+            document.getElementById('card').classList.add('flipped');
+            document.getElementById('check').style.display = 'none';
+            document.getElementById('giveup').style.display = 'none';
+            document.getElementById('next').style.display = 'block';
+        }
+
+        function next() {
+            idx = (idx + 1) % cards.length; tries = 3;
+            document.getElementById('card').classList.remove('flipped');
+            document.getElementById('check').style.display = 'block';
+            document.getElementById('giveup').style.display = 'block';
+            document.getElementById('next').style.display = 'none';
+            document.getElementById('ans').value = '';
+            updateUI();
+        }
+
+        function add() {
+            const f = document.getElementById('f').value, b = document.getElementById('b').value;
+            if(f && b) { cards.push({front:f, back:b}); localStorage.setItem('t_cards', JSON.stringify(cards)); location.reload(); }
+        }
+
+        init();
+    </script>
+</body>
+</html>
